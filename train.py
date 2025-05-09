@@ -106,7 +106,9 @@ def main(args):
         shuffle=True,
         num_workers=4,
         pin_memory=True,
-        drop_last=True
+        drop_last=True,
+        prefetch_factor=2,
+        persistent_workers=True
     )
     print("Dataset prepared, number of batches:", len(dataloader))
 
