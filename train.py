@@ -215,6 +215,10 @@ def main(args):
     optimizer_G = optim.Adam(G.parameters(), lr=lr, betas=(0.0, 0.9))
     optimizer_D = optim.Adam(D.parameters(), lr=lr, betas=(0.0, 0.9))
 
+    # lr decay for scheduler
+    scheduler_G = optim.lr_scheduler.StepLR(optimizer_G, step_size=50, gamma=0.5)
+    scheduler_D = optim.lr_scheduler.StepLR(optimizer_D, step_size=50, gamma=0.5)
+
     # WGAN-GP hyperparameters
     lambda_gp = args.lambda_gp
 
@@ -373,6 +377,8 @@ def main(args):
                 'optimizer_D_state_dict': optimizer_D.state_dict()
             }, checkpoint_path)
             print(f"Checkpoint saved at epoch {epoch}")
+            scheduler_G.step()
+            scheduler_D.step()
 
     writer.close()
 
