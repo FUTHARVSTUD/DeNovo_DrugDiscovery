@@ -42,6 +42,11 @@ def main(args):
     random.seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+    
+    # Force cuDNN to be deterministic
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
     data_path = args.data_path
     df = pd.read_csv(data_path)
     print("Loaded", len(df), "molecules.")
@@ -95,7 +100,14 @@ def main(args):
             return token_ids, prop_vec
 
     dataset = SelfiesConditionalDataset(df, token2idx, max_len=args.max_len)
-    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, num_workers=4)
+    dataloader = DataLoader(
+        dataset,
+        batch_size=args.batch_size,
+        shuffle=True,
+        num_workers=4,
+        pin_memory=True,
+        drop_last=True
+    )
     print("Dataset prepared, number of batches:", len(dataloader))
 
     #%% [code]
