@@ -1,4 +1,5 @@
 import os
+import torch.distributed
 import numpy as np
 import pandas as pd
 import random
@@ -32,6 +33,9 @@ def parse_args():
     parser.add_argument("--output_dir", type=str, default="~/projects/DeNovo_DrugDiscovery/outputs/exp1")
     parser.add_argument("--checkpoint_interval", type=int, default=5)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--tau_start", type=float, default=2.0)
+    parser.add_argument("--tau_end",   type=float, default=0.5)
+    parser.add_argument("--tau_anneal_epochs", type=int, default=150)
     return parser.parse_args()
 
 def main(args):
@@ -47,9 +51,16 @@ def main(args):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
+    # Distributed setup
+    args.local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    torch.distributed.init_process_group(backend="nccl")
+    torch.cuda.set_device(args.local_rank)
+    device = torch.device("cuda", index=args.local_rank)
+
     data_path = args.data_path
     df = pd.read_csv(data_path)
-    print("Loaded", len(df), "molecules.")
+    if args.local_rank == 0:
+        print("Loaded", len(df), "molecules.")
 
     # Tokenize SELFIES and build vocabulary
     def tokenize_selfies(selfies_str):
@@ -66,7 +77,8 @@ def main(args):
     token2idx = {t: i for i, t in enumerate(vocab)}
     idx2token = {i: t for t, i in token2idx.items()}
     vocab_size = len(vocab)
-    print("Vocab size:", vocab_size)
+    if args.local_rank == 0:
+        print("Vocab size:", vocab_size)
 
     #%% [code]
     # Create a PyTorch Dataset for conditional generation.
@@ -100,17 +112,20 @@ def main(args):
             return token_ids, prop_vec
 
     dataset = SelfiesConditionalDataset(df, token2idx, max_len=args.max_len)
+    # Distributed sampler for DataLoader
+    sampler = torch.utils.data.distributed.DistributedSampler(dataset)
     dataloader = DataLoader(
         dataset,
         batch_size=args.batch_size,
-        shuffle=True,
+        sampler=sampler,
         num_workers=4,
         pin_memory=True,
         drop_last=True,
         prefetch_factor=2,
         persistent_workers=True
     )
-    print("Dataset prepared, number of batches:", len(dataloader))
+    if args.local_rank == 0:
+        print("Dataset prepared, number of batches:", len(dataloader))
 
     #%% [code]
     # === 2. Model Definition ===
@@ -124,8 +139,9 @@ def main(args):
         y = logits + gumbel
         return F.softmax(y / tau, dim=-1)
 
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    print(f"Using device: {device}")
+    # device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    if args.local_rank == 0:
+        print(f"Using device: {device}")
 
     class ConditionalGenerator(nn.Module):
         def __init__(self, noise_dim, prop_dim, hidden_dim, vocab_size, max_len, embed_dim=256):
@@ -205,9 +221,12 @@ def main(args):
     embed_dim = args.embed_dim
     max_len = args.max_len
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     G = ConditionalGenerator(noise_dim, prop_dim, hidden_dim, vocab_size, max_len, embed_dim).to(device)
     D = ConditionalDiscriminator(vocab_size, embed_dim, hidden_dim, prop_dim, max_len).to(device)
+    # Wrap models with DDP
+    G = nn.parallel.DistributedDataParallel(G, device_ids=[args.local_rank], output_device=args.local_rank)
+    D = nn.parallel.DistributedDataParallel(D, device_ids=[args.local_rank], output_device=args.local_rank)
 
     #%% [code]
     # === 3. Losses and Optimizers ===
@@ -294,11 +313,19 @@ def main(args):
     # === 5. Training Loop ===
     num_epochs = args.num_epochs  # Adjust based on your dataset and training needs
     n_critic = args.n_critic      # Number of D updates per G update
-    writer = SummaryWriter(log_dir=os.path.join(args.output_dir, 'training_logs'))
+    writer = SummaryWriter(log_dir=os.path.join(args.output_dir, 'training_logs')) if args.local_rank == 0 else None
 
     scaler = GradScaler()
 
     for epoch in range(1, num_epochs+1):
+        # Shuffle sampler for each epoch
+        sampler.set_epoch(epoch)
+        tau = max(
+        args.tau_end,
+        args.tau_start
+        - (args.tau_start - args.tau_end) * epoch / args.tau_anneal_epochs
+        )
+
         for i, (real_seq, prop_vec) in enumerate(dataloader):
             batch_size = real_seq.size(0)
             real_seq = real_seq.to(device)
@@ -310,7 +337,7 @@ def main(args):
             with autocast():
                 # Sample noise and generate fake sequences from G
                 noise = torch.randn(batch_size, noise_dim, device=device)
-                fake_probs = G(noise, prop_vec, temperature=1.0)  # shape: [batch, max_len-1, vocab_size]
+                fake_probs = G(noise, prop_vec, temperature=tau)  # shape: [batch, max_len-1, vocab_size]
 
                 # For D, we need discrete tokens.
                 # Here we use argmax for real/fake samples (note: not differentiable, but only used for D)
@@ -336,7 +363,7 @@ def main(args):
                 optimizer_G.zero_grad()
                 with autocast():
                     noise = torch.randn(batch_size, noise_dim, device=device)
-                    fake_probs = G(noise, prop_vec, temperature=1.0)
+                    fake_probs = G(noise, prop_vec, temperature=tau)
                     fake_seq = torch.argmax(fake_probs, dim=-1)
                     fake_seq = F.pad(fake_seq, (0, 1), value=token2idx["<PAD>"])
 
@@ -358,29 +385,33 @@ def main(args):
                 scaler.update()
 
         # Logging
-        writer.add_scalar("Loss/Discriminator", d_loss_total.item(), epoch)
-        writer.add_scalar("Loss/Generator", g_loss.item(), epoch)
-        writer.add_scalar("PropertyReward", torch.mean(prop_reward).item(), epoch)
-        writer.add_scalar("Reward/ValidPercent", valid_percent, epoch)
-        print(f"Valid molecules: {valid_count}/{batch_size} ({valid_percent:.2f}%)")
-        print(f"Epoch [{epoch}/{num_epochs}] d_loss: {d_loss_total.item():.4f} | g_loss: {g_loss.item():.4f} | Reward: {torch.mean(prop_reward).item():.4f}")
+        if args.local_rank == 0:
+            writer.add_scalar("Loss/Discriminator", d_loss_total.item(), epoch)
+            writer.add_scalar("Loss/Generator", g_loss.item(), epoch)
+            writer.add_scalar("PropertyReward", torch.mean(prop_reward).item(), epoch)
+            writer.add_scalar("Reward/ValidPercent", valid_percent, epoch)
+            print(f"Valid molecules: {valid_count}/{batch_size} ({valid_percent:.2f}%)")
+            print(f"Epoch [{epoch}/{num_epochs}] d_loss: {d_loss_total.item():.4f} | g_loss: {g_loss.item():.4f} | Reward: {torch.mean(prop_reward).item():.4f}")
 
         # Optionally, save checkpoints every few epochs
-        if epoch % 5 == 0:
-            checkpoint_path = os.path.join(args.output_dir, "Checkpoints", f"checkpoint_epoch_{epoch}.pth")
-            os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
-            torch.save({
-                'epoch': epoch,
-                'G_state_dict': G.state_dict(),
-                'D_state_dict': D.state_dict(),
-                'optimizer_G_state_dict': optimizer_G.state_dict(),
-                'optimizer_D_state_dict': optimizer_D.state_dict()
-            }, checkpoint_path)
-            print(f"Checkpoint saved at epoch {epoch}")
-            scheduler_G.step()
-            scheduler_D.step()
+        torch.distributed.barrier()
+        if epoch % args.checkpoint_interval == 0:
+            if args.local_rank == 0:
+                checkpoint_path = os.path.join(args.output_dir, "Checkpoints", f"checkpoint_epoch_{epoch}.pth")
+                os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
+                torch.save({
+                    'epoch': epoch,
+                    'G_state_dict': G.state_dict(),
+                    'D_state_dict': D.state_dict(),
+                    'optimizer_G_state_dict': optimizer_G.state_dict(),
+                    'optimizer_D_state_dict': optimizer_D.state_dict()
+                }, checkpoint_path)
+                print(f"Checkpoint saved at epoch {epoch}")
+                scheduler_G.step()
+                scheduler_D.step()
 
-    writer.close()
+    if args.local_rank == 0 and writer is not None:
+        writer.close()
 
 if __name__ == "__main__":
     args = parse_args()
