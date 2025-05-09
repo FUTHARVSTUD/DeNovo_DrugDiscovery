@@ -1,6 +1,7 @@
 import os
 import numpy as np
 import pandas as pd
+import random
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -34,6 +35,13 @@ def parse_args():
     return parser.parse_args()
 
 def main(args):
+    # Reproducibility: set random seeds
+    seed = args.seed if hasattr(args, "seed") else 42
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
     data_path = args.data_path
     df = pd.read_csv(data_path)
     print("Loaded", len(df), "molecules.")
