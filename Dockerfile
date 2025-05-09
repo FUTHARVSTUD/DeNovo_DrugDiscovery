@@ -1,5 +1,5 @@
 # 1. Base image with CUDA and cuDNN
-FROM nvidia/cuda:12.4.0-cudnn8-devel-ubuntu20.04
+FROM nvidia/cuda:12.6.0-cudnn-devel-ubuntu20.04
 
 # 2. Install OS-level prerequisites
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
