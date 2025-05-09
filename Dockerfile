@@ -7,11 +7,11 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     rm -rf /var/lib/apt/lists/*
 
 # 3. Set up a working directory
-WORKDIR /De_Novo_drug_discovery
+WORKDIR /DeNovo_DrugDiscovery
 
 # 4. Copy your code and pinned deps
-COPY requirements.txt /De_Novo_drug_discovery
-COPY De_Novo_drug_discovery.ipynb /De_Novo_drug_discovery/
+COPY requirements.txt /DeNovo_DrugDiscovery
+COPY De_Novo_drug_discovery.ipynb /DeNovo_DrugDiscovery/
 # (Also copy any helper scripts or data folders you use)
 
 # 5. Install Python packages
