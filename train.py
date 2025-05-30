@@ -53,7 +53,7 @@ def main(args):
 
     # Distributed setup
     args.local_rank = int(os.environ.get("LOCAL_RANK", 0))
-    torch.distributed.init_process_group(backend="nccl")
+    torch.distributed.init_process_group(backend="nccl")›
     torch.cuda.set_device(args.local_rank)
     device = torch.device("cuda", index=args.local_rank)
 

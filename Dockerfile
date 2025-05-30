@@ -11,8 +11,9 @@ WORKDIR /workspace
 
 # 4. Copy and install Python dependencies
 COPY requirements.txt /workspace/
-RUN pip3 install --upgrade pip && \
-    pip3 install -r requirements.txt
+RUN pip3 --default-timeout=100 install --upgrade pip wheel 'setuptools<66.0.0' \
+ && pip3 --default-timeout=100 install --only-binary=grpcio grpcio \
+ && pip3 --default-timeout=100 install -r requirements.txt
 
 # 5. Copy the rest of the project
 COPY . /workspace
