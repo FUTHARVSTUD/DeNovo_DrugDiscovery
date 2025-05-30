@@ -242,10 +242,15 @@ def main(args):
     lambda_gp = args.lambda_gp
 
     def gradient_penalty(D, real_samples, fake_samples, prop_vec):
+        # Unwrap DistributedDataParallel to access module attributes
+        if isinstance(D, torch.nn.parallel.DistributedDataParallel):
+            disc = D.module
+        else:
+            disc = D
         batch_size = real_samples.size(0)
         # Obtain embeddings from the discriminator's embedding layer
-        real_emb = D.embedding(real_samples)   # shape: [batch, max_len, embed_dim]
-        fake_emb = D.embedding(fake_samples)     # shape: [batch, max_len, embed_dim]
+        real_emb = disc.embedding(real_samples)   # shape: [batch, max_len, embed_dim]
+        fake_emb = disc.embedding(fake_samples)     # shape: [batch, max_len, embed_dim]
 
         # Create alpha with shape [batch, 1, 1] and expand to match real_emb
         alpha = torch.rand(batch_size, 1, 1, device=device)
@@ -257,7 +262,7 @@ def main(args):
 
         # Disable cuDNN for the RNN forward pass in the gradient penalty calculation
         with torch.backends.cudnn.flags(enabled=False):
-            d_interpolates = D.forward_from_emb(interpolates, prop_vec)
+            d_interpolates = disc.forward_from_emb(interpolates, prop_vec)
 
         fake = torch.ones(d_interpolates.size(), device=device)
 
