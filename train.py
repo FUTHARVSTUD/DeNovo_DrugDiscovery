@@ -386,6 +386,7 @@ def main(args):
 
                 scaler.scale(g_loss).backward()
                 torch.nn.utils.clip_grad_norm_(G.parameters(), max_norm=1.0)
+                scaler.unscale_(optimizer_G)
                 scaler.step(optimizer_G)
                 scaler.update()
 
