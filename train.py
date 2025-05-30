@@ -320,7 +320,8 @@ def main(args):
     n_critic = args.n_critic      # Number of D updates per G update
     writer = SummaryWriter(log_dir=os.path.join(args.output_dir, 'training_logs')) if args.local_rank == 0 else None
 
-    scaler = GradScaler()
+    scaler_D = GradScaler()
+    scaler_G = GradScaler()
 
     for epoch in range(1, num_epochs+1):
         # Shuffle sampler for each epoch
@@ -359,9 +360,9 @@ def main(args):
                 gp = gradient_penalty(D, real_seq, fake_seq.detach(), prop_vec)
                 d_loss_total = d_loss + lambda_gp * gp
 
-            scaler.scale(d_loss_total).backward()
-            scaler.step(optimizer_D)
-            scaler.update()
+            scaler_D.scale(d_loss_total).backward()
+            scaler_D.step(optimizer_D)
+            scaler_D.update()
 
             # Train Generator every n_critic iterations
             if i % n_critic == 0:
@@ -384,11 +385,11 @@ def main(args):
                     reward_scale = 0.5  # can tune this over time
                     g_loss = g_loss_adv - reward_scale * torch.mean(prop_reward)
 
-                scaler.scale(g_loss).backward()
-                scaler.unscale_(optimizer_G)
+                scaler_G.scale(g_loss).backward()
+                scaler_G.unscale_(optimizer_G)
                 torch.nn.utils.clip_grad_norm_(G.parameters(), max_norm=1.0)
-                scaler.step(optimizer_G)
-                scaler.update()
+                scaler_G.step(optimizer_G)
+                scaler_G.update()
 
         # Logging
         if args.local_rank == 0:
