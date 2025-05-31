@@ -26,9 +26,10 @@ def parse_args():
     parser.add_argument("--hidden_dim", type=int, default=1024)
     parser.add_argument("--embed_dim", type=int, default=512)
     parser.add_argument("--max_len", type=int, default=100)
-    parser.add_argument("--lr", type=float, default=2e-4)
-    parser.add_argument("--n_critic", type=int, default=5)
-    parser.add_argument("--lambda_gp", type=float, default=15.0)
+    parser.add_argument("--lr_g", type=float, default=3e-4)
+    parser.add_argument("--lr_d", type=float, default=1e-4)
+    parser.add_argument("--n_critic", type=int, default=2)
+    parser.add_argument("--lambda_gp", type=float, default=5.0)
     parser.add_argument("--num_epochs", type=int, default=200)
     parser.add_argument("--output_dir", type=str, default="~/projects/DeNovo_DrugDiscovery/outputs/exp1")
     parser.add_argument("--checkpoint_interval", type=int, default=5)
@@ -36,6 +37,7 @@ def parse_args():
     parser.add_argument("--tau_start", type=float, default=2.0)
     parser.add_argument("--tau_end",   type=float, default=0.5)
     parser.add_argument("--tau_anneal_epochs", type=int, default=150)
+    parser.add_argument("--max_norm", type=float, default=5.0)
     return parser.parse_args()
 
 def main(args):
@@ -230,13 +232,14 @@ def main(args):
 
     #%% [code]
     # === 3. Losses and Optimizers ===
-    lr = args.lr
-    optimizer_G = optim.Adam(G.parameters(), lr=lr, betas=(0.0, 0.9))
-    optimizer_D = optim.Adam(D.parameters(), lr=lr, betas=(0.0, 0.9))
+    lr_g = args.lr_g
+    lr_d = args.lr_d
+    optimizer_G = optim.Adam(G.parameters(), lr=lr_g, betas=(0.0, 0.9))
+    optimizer_D = optim.Adam(D.parameters(), lr=lr_d, betas=(0.0, 0.9))
 
     # lr decay for scheduler
-    scheduler_G = optim.lr_scheduler.StepLR(optimizer_G, step_size=50, gamma=0.5)
-    scheduler_D = optim.lr_scheduler.StepLR(optimizer_D, step_size=50, gamma=0.5)
+    scheduler_G = optim.lr_scheduler.StepLR(optimizer_G, step_size=25, gamma=0.5)
+    scheduler_D = optim.lr_scheduler.StepLR(optimizer_D, step_size=25, gamma=0.5)
 
     # WGAN-GP hyperparameters
     lambda_gp = args.lambda_gp
@@ -389,7 +392,16 @@ def main(args):
                 # Attempt to unscale and clip, but skip if already unscaled
                 try:
                     scaler_G.unscale_(optimizer_G)
-                    torch.nn.utils.clip_grad_norm_(G.parameters(), max_norm=1.0)
+                    # After unscale, before clipping:
+                    total_norm = 0.0
+                    for p in G.parameters():
+                        if p.grad is not None:
+                            param_norm = p.grad.detach().data.norm(2)
+                            total_norm += param_norm.item() ** 2
+                    total_norm = total_norm ** 0.5
+                    if args.local_rank == 0:
+                        writer.add_scalar("GradNorm/Generator", total_norm, epoch)
+                    torch.nn.utils.clip_grad_norm_(G.parameters(), max_norm=args.max_norm)
                 except RuntimeError:
                     pass
                 try:
@@ -421,8 +433,8 @@ def main(args):
                     'optimizer_D_state_dict': optimizer_D.state_dict()
                 }, checkpoint_path)
                 print(f"Checkpoint saved at epoch {epoch}")
-                scheduler_G.step()
-                scheduler_D.step()
+        scheduler_G.step()
+        scheduler_D.step()
 
     if args.local_rank == 0 and writer is not None:
         writer.close()
