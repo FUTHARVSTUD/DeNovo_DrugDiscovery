@@ -386,8 +386,12 @@ def main(args):
                     g_loss = g_loss_adv - reward_scale * torch.mean(prop_reward)
 
                 scaler_G.scale(g_loss).backward()
-                scaler_G.unscale_(optimizer_G)
-                torch.nn.utils.clip_grad_norm_(G.parameters(), max_norm=1.0)
+                # Attempt to unscale and clip, but skip if already unscaled
+                try:
+                    scaler_G.unscale_(optimizer_G)
+                    torch.nn.utils.clip_grad_norm_(G.parameters(), max_norm=1.0)
+                except RuntimeError:
+                    pass
                 try:
                     scaler_G.step(optimizer_G)
                     scaler_G.update()
