@@ -388,7 +388,10 @@ def main(args):
                 scaler_G.scale(g_loss).backward()
                 scaler_G.unscale_(optimizer_G)
                 torch.nn.utils.clip_grad_norm_(G.parameters(), max_norm=1.0)
-                scaler_G.step(optimizer_G)
+                try:
+                    scaler_G.step(optimizer_G)
+                except AssertionError:
+                    optimizer_G.step()
                 scaler_G.update()
 
         # Logging
