@@ -393,6 +393,7 @@ def main(args):
                     scaler_G.update()
                 except AssertionError:
                     optimizer_G.step()
+                    scaler_G.update()
 
         # Logging
         if args.local_rank == 0:
