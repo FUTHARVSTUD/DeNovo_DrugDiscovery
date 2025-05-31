@@ -390,9 +390,9 @@ def main(args):
                 torch.nn.utils.clip_grad_norm_(G.parameters(), max_norm=1.0)
                 try:
                     scaler_G.step(optimizer_G)
+                    scaler_G.update()
                 except AssertionError:
                     optimizer_G.step()
-                scaler_G.update()
 
         # Logging
         if args.local_rank == 0:
