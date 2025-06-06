@@ -326,6 +326,9 @@ def main(args):
     scaler_D = GradScaler()
     scaler_G = GradScaler()
 
+    if args.local_rank == 0:
+        print(f"→ G_lr={optimizer_G.param_groups[0]['lr']:.1e}, D_lr={optimizer_D.param_groups[0]['lr']:.1e}, lambda_gp={lambda_gp}, n_critic={n_critic}, reward_scale_first20=0.0")
+
     for epoch in range(1, num_epochs+1):
         # Shuffle sampler for each epoch
         sampler.set_epoch(epoch)
